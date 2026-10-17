@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Kerala Local Store</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    .product-img { height: 190px; object-fit: cover; background: #e9ecef; }
+    .card { transition: transform .15s, box-shadow .15s; }
+    .card:hover { transform: translateY(-3px); box-shadow: 0 6px 16px rgba(0,0,0,.12); }
+    .cart-img { width: 52px; height: 52px; object-fit: cover; border-radius: 6px; }
+  </style>
+</head>
+<body class="bg-light">
+
+<nav class="navbar navbar-dark bg-success sticky-top">
+  <div class="container">
+    <span class="navbar-brand fw-bold">Kerala Local Store</span>
+    <button class="btn btn-light position-relative" data-bs-toggle="offcanvas" data-bs-target="#cartPanel">
+      Cart
+      <span id="cartBadge" class="badge bg-danger ms-1">0</span>
+    </button>
+  </div>
+</nav>
+
+<div class="container py-4">
+  <div class="row g-2 mb-3">
+    <div class="col-md-6">
+      <input id="search" class="form-control" placeholder="Search products...">
+    </div>
+    <div class="col-md-3">
+      <select id="sort" class="form-select">
+        <option value="">Sort: Default</option>
+        <option value="price_asc">Price: Low to High</option>
+        <option value="price_desc">Price: High to Low</option>
+        <option value="name">Name: A to Z</option>
+      </select>
+    </div>
+  </div>
+  <div id="cats" class="mb-3 d-flex flex-wrap gap-2"></div>
+  <div id="grid" class="row g-3"></div>
+</div>
+
+<!-- Cart panel -->
+<div class="offcanvas offcanvas-end" tabindex="-1" id="cartPanel">
+  <div class="offcanvas-header">
+    <h5 class="offcanvas-title">Your cart</h5>
+    <button class="btn-close" data-bs-dismiss="offcanvas"></button>
+  </div>
+  <div class="offcanvas-body d-flex flex-column">
+    <div id="cartItems" class="flex-grow-1"></div>
+    <div id="cartFooter"></div>
+  </div>
+</div>
+
+<!-- Product detail -->
+<div class="modal fade" id="detailModal" tabindex="-1">
+  <div class="modal-dialog modal-lg modal-dialog-centered">
+    <div class="modal-content" id="detailBody"></div>
+  </div>
+</div>
+
+<div class="toast-container position-fixed bottom-0 end-0 p-3" id="toasts"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+let sid = localStorage.getItem("sid");
+if (!sid) { sid = "s" + Math.random().toString(36).slice(2) + Date.now(); localStorage.setItem("sid", sid); }
+const H = {"Content-Type": "application/json", "X-Session-Id": sid};
+const $ = id => document.getElementById(id);
+const state = {category: "All", search: "", sort: ""};
+const FALLBACK = "data:image/svg+xml;utf8," + encodeURIComponent(
+  "<svg xmlns='http://www.w3.org/2000/svg' width='500' height='380'><rect width='100%' height='100%' fill='#dee2e6'/><text x='50%' y='50%' font-size='28' fill='#6c757d' text-anchor='middle' dominant-baseline='middle'>No image</text></svg>");
+const money = n => "₹" + Number(n).toLocaleString("en-IN");
+
+function fb(img) { img.onerror = null; img.src = FALLBACK; }
+
+function toast(text, type = "success") {
+  const el = document.createElement("div");
+  el.className = `toast align-items-center text-bg-${type} border-0`;
+  el.innerHTML = `<div class="d-flex"><div class="toast-body">${text}</div><button class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button></div>`;
+  $("toasts").appendChild(el);
+  const t = new bootstrap.Toast(el, {delay: 2800});
+  el.addEventListener("hidden.bs.toast", () => el.remove());
+  t.show();
+}
+
+function errText(d) {
+  return Array.isArray(d.detail) ? d.detail.map(x => x.msg).join("; ") : (d.detail || "Something went wrong");
+}
+
+function stockBadge(p) {
+  if (p.stock <= 0) return '<span class="badge bg-danger">Out of stock</span>';
+  if (p.stock <= 5) return `<span class="badge bg-warning text-dark">Only ${p.stock} left</span>`;
+  return '<span class="badge bg-success">In stock</span>';
+}
+
+async function loadCategories() {
+  const cats = ["All", ...(await (await fetch("/categories")).json())];
+  $("cats").innerHTML = cats.map(c =>
+    `<button class="btn btn-sm ${c === state.category ? "btn-success" : "btn-outline-success"}" onclick="setCategory('${c}')">${c}</button>`).join("");
+}
+
+function setCategory(c) { state.category = c; loadCategories(); loadProducts(); }
+
+async function loadProducts() {
+  const q = new URLSearchParams();
+  if (state.search) q.set("search", state.search);
+  if (state.category !== "All") q.set("category", state.category);
+  if (state.sort) q.set("sort", state.sort);
+  const list = await (await fetch("/products?" + q)).json();
+  if (!list.length) { $("grid").innerHTML = '<p class="text-muted">No products found.</p>'; return; }
+  $("grid").innerHTML = list.map(p => `
+    <div class="col-6 col-md-4 col-lg-3">
+      <div class="card h-100">
+        <img src="${p.image_url}" class="card-img-top product-img" alt="${p.name}" onerror="fb(this)">
+        <div class="card-body d-flex flex-column">
+          <small class="text-muted">${p.category}</small>
+          <h6 class="mb-1">${p.name}</h6>
+          <div class="mb-2"><strong>${money(p.price)}</strong> ${stockBadge(p)}</div>
+          <div class="mt-auto d-flex gap-2">
+            <button class="btn btn-outline-success btn-sm flex-fill" onclick="openDetail(${p.id})">Details</button>
+            <button class="btn btn-success btn-sm flex-fill" ${p.in_stock ? "" : "disabled"} onclick="addToCart(${p.id})">Add</button>
+          </div>
+        </div>
+      </div>
+    </div>`).join("");
+}
+
+async function openDetail(id) {
+  const res = await fetch("/products/" + id);
+  if (!res.ok) return toast("Product not found", "danger");
+  const p = await res.json();
+  $("detailBody").innerHTML = `
+    <div class="modal-header"><h5 class="modal-title">${p.name}</h5><button class="btn-close" data-bs-dismiss="modal"></button></div>
+    <div class="modal-body"><div class="row g-3">
+      <div class="col-md-6"><img src="${p.image_url}" class="img-fluid rounded" alt="${p.name}" onerror="fb(this)"></div>
+      <div class="col-md-6">
+        <span class="badge bg-secondary mb-2">${p.category}</span>
+        <p>${p.description}</p>
+        <h4>${money(p.price)}</h4>
+        <p>${stockBadge(p)} <small class="text-muted">(${p.stock} available)</small></p>
+        <button class="btn btn-success" ${p.in_stock ? "" : "disabled"} onclick="addToCart(${p.id})">Add to cart</button>
+      </div>
+    </div></div>`;
+  bootstrap.Modal.getOrCreateInstance($("detailModal")).show();
+}
+
+async function cartCall(url, method, body, okMsg, okType = "success") {
+  const res = await fetch(url, {method, headers: H, body: body ? JSON.stringify(body) : undefined});
+  const data = await res.json();
+  if (!res.ok) { toast(errText(data), "danger"); return; }
+  if (okMsg) toast(okMsg, okType);
+  renderCart(data);
+}
+
+const addToCart = id => cartCall("/cart/add", "POST", {product_id: id, quantity: 1}, "Added to cart");
+const removeItem = id => cartCall("/cart/" + id, "DELETE", null, "Removed from cart", "warning");
+const clearCart = () => cartCall("/cart", "DELETE", null, "Cart cleared", "warning");
+function setQty(id, q) { return q < 1 ? removeItem(id) : cartCall("/cart/" + id, "PUT", {quantity: q}); }
+
+function renderCart(c) {
+  $("cartBadge").textContent = c.count;
+  if (!c.items.length) {
+    $("cartItems").innerHTML = '<p class="text-muted">Your cart is empty.</p>';
+    $("cartFooter").innerHTML = "";
+    return;
+  }
+  $("cartItems").innerHTML = c.items.map(i => `
+    <div class="d-flex align-items-center gap-2 border-bottom py-2">
+      <img src="${i.image_url}" class="cart-img" alt="" onerror="fb(this)">
+      <div class="flex-grow-1">
+        <div class="small fw-semibold">${i.name}</div>
+        <div class="small text-muted">${money(i.price)} each</div>
+        <div class="btn-group btn-group-sm mt-1">
+          <button class="btn btn-outline-secondary" onclick="setQty(${i.product_id}, ${i.quantity - 1})">-</button>
+          <span class="btn btn-light disabled">${i.quantity}</span>
+          <button class="btn btn-outline-secondary" onclick="setQty(${i.product_id}, ${i.quantity + 1})">+</button>
+        </div>
+      </div>
+      <div class="text-end">
+        <div class="small fw-semibold">${money(i.line_total)}</div>
+        <button class="btn btn-sm btn-outline-danger mt-1" onclick="removeItem(${i.product_id})">Remove</button>
+      </div>
+    </div>`).join("");
+  $("cartFooter").innerHTML = `
+    <div class="d-flex justify-content-between fs-5 fw-bold pt-3"><span>Total</span><span>${money(c.total)}</span></div>
+    <button class="btn btn-outline-danger w-100 mt-2" onclick="clearCart()">Clear cart</button>`;
+}
+
+async function loadCart() {
+  const res = await fetch("/cart", {headers: H});
+  renderCart(await res.json());
+}
+
+let timer;
+$("search").addEventListener("input", e => {
+  clearTimeout(timer);
+  timer = setTimeout(() => { state.search = e.target.value.trim(); loadProducts(); }, 250);
+});
+$("sort").addEventListener("change", e => { state.sort = e.target.value; loadProducts(); });
+
+loadCategories();
+loadProducts();
+loadCart();
+</script>
+</body>
+</html>
